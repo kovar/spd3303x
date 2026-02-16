@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SPD3303X Power Supply</title>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css" />
+  <!-- Theme: inline to avoid flash -->
+  <script>
+    (function() {
+      var key = 'spd3303x-theme';
+      var stored = localStorage.getItem(key);
+      var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', theme);
+      if (!stored) localStorage.setItem(key, theme);
+
+      window._spd3303xToggleTheme = function() {
+        var cur = document.documentElement.getAttribute('data-theme');
+        var next = cur === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem(key, next);
+        var btn = document.getElementById('themeToggle');
+        if (btn) {
+          btn.textContent = next === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
+          btn.title = next === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+        }
+      };
+    })();
+  </script>
+  <!-- Chart.js + date adapter (pinned versions) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</head>
+
+<body>
+  <!-- ── Toolbar ──────────────────────────────────────────── -->
+  <nav class="toolbar">
+    <!-- Connection -->
+    <div class="toolbar-group">
+      <span class="status-dot" id="statusDot"></span>
+      <button id="connectSerial">USB</button>
+      <button id="connectWs">Bridge</button>
+      <input type="text" id="wsUrl" class="ws-url-input" value="ws://localhost:8765" placeholder="ws://host:port" />
+      <button id="disconnect" disabled>Disconnect</button>
+    </div>
+
+    <!-- Measurement -->
+    <div class="toolbar-group">
+      <button id="startMeasure" data-requires-connection disabled>Play</button>
+      <button id="stopMeasure" disabled>Stop</button>
+    </div>
+
+    <!-- Recording -->
+    <div class="toolbar-group">
+      <button id="startRecord" data-requires-connection disabled>Record</button>
+      <button id="stopRecord" disabled>Save</button>
+    </div>
+
+    <!-- Sampling rate -->
+    <div class="toolbar-group">
+      <div class="sampling-inline">
+        <span class="unit-label">Interval</span>
+        <input type="number" id="samplingRate" value="1000" min="250" step="250" />
+        <span class="unit-label">ms</span>
+      </div>
+    </div>
+
+    <div class="toolbar-spacer"></div>
+
+    <!-- Demo + Theme toggle -->
+    <button id="demo">Demo</button>
+    <button class="theme-toggle" id="themeToggle" onclick="_spd3303xToggleTheme()" title="Toggle theme">&#127769;</button>
+    <script>
+      (function() {
+        var d = document.documentElement.getAttribute('data-theme') === 'dark';
+        var b = document.getElementById('themeToggle');
+        if (b) { b.textContent = d ? '\u2600\uFE0F' : '\uD83C\uDF19'; b.title = d ? 'Switch to light mode' : 'Switch to dark mode'; }
+      })();
+    </script>
+  </nav>
+
+  <!-- ── Main Content ─────────────────────────────────────── -->
+  <main class="main-content">
+    <!-- 2-Channel Live Readout -->
+    <div class="readout">
+      <div class="readout-grid">
+        <!-- CH1 -->
+        <div class="readout-channel">
+          <div class="channel-header">
+            <span class="channel-label ch1">CH1</span>
+            <span class="mode-badge mode-cv" id="ch1Mode">CV</span>
+            <span class="output-state output-off" id="ch1OutputState">OFF</span>
+          </div>
+          <div class="readout-row">
+            <span class="readout-value" id="ch1Voltage">---</span>
+            <span class="readout-unit">V</span>
+          </div>
+          <div class="readout-row">
+            <span class="readout-value" id="ch1Current">---</span>
+            <span class="readout-unit">A</span>
+          </div>
+          <div class="readout-row">
+            <span class="readout-power" id="ch1Power">---</span>
+            <span class="readout-unit">W</span>
+          </div>
+        </div>
+        <!-- CH2 -->
+        <div class="readout-channel">
+          <div class="channel-header">
+            <span class="channel-label ch2">CH2</span>
+            <span class="mode-badge mode-cv" id="ch2Mode">CV</span>
+            <span class="output-state output-off" id="ch2OutputState">OFF</span>
+          </div>
+          <div class="readout-row">
+            <span class="readout-value" id="ch2Voltage">---</span>
+            <span class="readout-unit">V</span>
+          </div>
+          <div class="readout-row">
+            <span class="readout-value" id="ch2Current">---</span>
+            <span class="readout-unit">A</span>
+          </div>
+          <div class="readout-row">
+            <span class="readout-power" id="ch2Power">---</span>
+            <span class="readout-unit">W</span>
+          </div>
+        </div>
+      </div>
+      <div class="readout-footer">
+        <span class="readout-time" id="readoutTime"></span>
+        <span id="trackingMode" style="font-size:0.8rem; color:var(--text-muted);"></span>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <details>
+      <summary>Controls</summary>
+      <div class="details-content">
+        <div class="controls-grid">
+          <!-- CH1 Controls -->
+          <div class="control-channel">
+            <div class="control-channel-header ch1">CH1</div>
+            <div class="setpoint-group">
+              <label>V</label>
+              <input type="number" id="ch1VoltageInput" placeholder="0.000" step="0.1" min="0" max="32" data-requires-connection />
+              <button id="setCh1Voltage" data-requires-connection disabled>Set</button>
+            </div>
+            <div class="setpoint-group">
+              <label>A</label>
+              <input type="number" id="ch1CurrentInput" placeholder="0.000" step="0.1" min="0" max="3.2" data-requires-connection />
+              <button id="setCh1Current" data-requires-connection disabled>Set</button>
+            </div>
+            <div class="output-buttons">
+              <button id="ch1OutputOn" class="btn-on" data-requires-connection disabled>ON</button>
+              <button id="ch1OutputOff" class="btn-off" data-requires-connection disabled>OFF</button>
+            </div>
+          </div>
+          <!-- CH2 Controls -->
+          <div class="control-channel">
+            <div class="control-channel-header ch2">CH2</div>
+            <div class="setpoint-group">
+              <label>V</label>
+              <input type="number" id="ch2VoltageInput" placeholder="0.000" step="0.1" min="0" max="32" data-requires-connection />
+              <button id="setCh2Voltage" data-requires-connection disabled>Set</button>
+            </div>
+            <div class="setpoint-group">
+              <label>A</label>
+              <input type="number" id="ch2CurrentInput" placeholder="0.000" step="0.1" min="0" max="3.2" data-requires-connection />
+              <button id="setCh2Current" data-requires-connection disabled>Set</button>
+            </div>
+            <div class="output-buttons">
+              <button id="ch2OutputOn" class="btn-on" data-requires-connection disabled>ON</button>
+              <button id="ch2OutputOff" class="btn-off" data-requires-connection disabled>OFF</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- Stats Bar -->
+    <div class="stats-bar">
+      <div class="stat-group">
+        <div class="stat-group-header ch1">CH1 Voltage</div>
+        <div class="stat-row">
+          <div class="stat-item"><div class="stat-label">Min</div><div class="stat-value" id="statCh1VMin">---</div></div>
+          <div class="stat-item"><div class="stat-label">Max</div><div class="stat-value" id="statCh1VMax">---</div></div>
+          <div class="stat-item"><div class="stat-label">Avg</div><div class="stat-value" id="statCh1VMean">---</div></div>
+        </div>
+      </div>
+      <div class="stat-group">
+        <div class="stat-group-header ch1">CH1 Current</div>
+        <div class="stat-row">
+          <div class="stat-item"><div class="stat-label">Min</div><div class="stat-value" id="statCh1IMin">---</div></div>
+          <div class="stat-item"><div class="stat-label">Max</div><div class="stat-value" id="statCh1IMax">---</div></div>
+          <div class="stat-item"><div class="stat-label">Avg</div><div class="stat-value" id="statCh1IMean">---</div></div>
+        </div>
+      </div>
+      <div class="stat-group">
+        <div class="stat-group-header ch2">CH2 Voltage</div>
+        <div class="stat-row">
+          <div class="stat-item"><div class="stat-label">Min</div><div class="stat-value" id="statCh2VMin">---</div></div>
+          <div class="stat-item"><div class="stat-label">Max</div><div class="stat-value" id="statCh2VMax">---</div></div>
+          <div class="stat-item"><div class="stat-label">Avg</div><div class="stat-value" id="statCh2VMean">---</div></div>
+        </div>
+      </div>
+      <div class="stat-group">
+        <div class="stat-group-header ch2">CH2 Current</div>
+        <div class="stat-row">
+          <div class="stat-item"><div class="stat-label">Min</div><div class="stat-value" id="statCh2IMin">---</div></div>
+          <div class="stat-item"><div class="stat-label">Max</div><div class="stat-value" id="statCh2IMax">---</div></div>
+          <div class="stat-item"><div class="stat-label">Avg</div><div class="stat-value" id="statCh2IMean">---</div></div>
+        </div>
+      </div>
+      <div class="stat-count">
+        <div class="stat-label">Count</div>
+        <div class="stat-value" id="statCount">0</div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="chart-section">
+      <div class="chart-controls">
+        <label for="timeRange">Window</label>
+        <select id="timeRange">
+          <option value="30">30 s</option>
+          <option value="60">1 min</option>
+          <option value="300" selected>5 min</option>
+          <option value="600">10 min</option>
+          <option value="1800">30 min</option>
+        </select>
+        <button id="clearChart">Clear</button>
+      </div>
+      <div class="chart-label">Voltage</div>
+      <div class="chart-wrapper">
+        <canvas id="voltageCanvas"></canvas>
+      </div>
+      <div class="chart-label">Current</div>
+      <div class="chart-wrapper">
+        <canvas id="currentCanvas"></canvas>
+      </div>
+    </div>
+
+    <!-- How to Use -->
+    <details open>
+      <summary>How to Use</summary>
+      <div class="details-content help-content">
+        <h4>1. Connect to your SPD3303X</h4>
+        <dl>
+          <dt>USB (Chrome/Edge only)</dt>
+          <dd>Click <strong>USB</strong> and select the virtual serial port. Uses the Web Serial API for direct hardware access &mdash; no extra software needed. Serial config: 9600 baud, 8N1.</dd>
+          <dt>Bridge (any browser)</dt>
+          <dd>Start the bridge: <code>uv run bridge.py</code>, then click <strong>Bridge</strong>. This relays SCPI commands over WebSocket so Firefox, Safari, and remote browsers can talk to the device.</dd>
+        </dl>
+
+        <h4>2. Toolbar buttons</h4>
+        <dl>
+          <dt>Play / Stop</dt>
+          <dd>Start or stop automatic polling. Sends 4 measurement queries per cycle to read CH1/CH2 voltage and current. Status (CV/CC, output state) is polled every 2 seconds.</dd>
+          <dt>Record / Save</dt>
+          <dd><strong>Record</strong> captures every reading with a timestamp. <strong>Save</strong> stops and downloads a CSV file with columns: Timestamp, CH1_Voltage_V, CH1_Current_A, CH2_Voltage_V, CH2_Current_A.</dd>
+        </dl>
+
+        <h4>3. Controls</h4>
+        <p>Expand the <strong>Controls</strong> section to set voltage/current for each channel and toggle outputs ON/OFF. Changes are sent immediately via SCPI commands.</p>
+
+        <h4>4. Charts</h4>
+        <p>Two stacked charts show voltage and current for both channels (CH1 red, CH2 blue). <strong>Window</strong> sets how much history to show. <strong>Clear</strong> erases all data and resets statistics.</p>
+
+        <h4>5. Demo mode</h4>
+        <p>Click <strong>Demo</strong> to generate fake power supply data (CH1: ~5V/0.5A, CH2: ~12V/1.0A) and try out the interface without hardware.</p>
+
+        <h4>6. Typical workflow</h4>
+        <p>Connect &rarr; set voltage/current &rarr; toggle output ON &rarr; <strong>Record</strong> &rarr; <strong>Play</strong> &rarr; monitor live readings &rarr; <strong>Stop</strong> &rarr; <strong>Save</strong> to download CSV.</p>
+
+        <h4>Running locally</h4>
+        <p>Don't open <code>index.html</code> directly &mdash; ES modules need a web server. Run <code>uv run serve.py</code> and open <strong>http://localhost:8000</strong>.</p>
+      </div>
+    </details>
+
+    <!-- SCPI Reference -->
+    <details>
+      <summary>SCPI Command Reference</summary>
+      <div class="details-content help-content">
+        <h4>Measurement Queries</h4>
+        <table>
+          <thead>
+            <tr><th>Command</th><th>Returns</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>MEASure:VOLTage? CH1</code></td><td><code>30.000</code></td><td>Actual output voltage on CH1</td></tr>
+            <tr><td><code>MEASure:CURRent? CH1</code></td><td><code>1.000</code></td><td>Actual output current on CH1</td></tr>
+            <tr><td><code>MEASure:POWEr? CH1</code></td><td><code>30.000</code></td><td>Actual output power on CH1</td></tr>
+            <tr><td><code>*IDN?</code></td><td>ID string</td><td>Device identification</td></tr>
+            <tr><td><code>SYSTem:STATus?</code></td><td><code>0x0224</code></td><td>Status register (CV/CC, output, tracking)</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Set Commands</h4>
+        <table>
+          <thead>
+            <tr><th>Command</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>CH1:VOLTage 25.000</code></td><td>Set CH1 voltage setpoint</td></tr>
+            <tr><td><code>CH1:CURRent 1.000</code></td><td>Set CH1 current limit</td></tr>
+            <tr><td><code>OUTPut CH1,ON</code></td><td>Enable CH1 output</td></tr>
+            <tr><td><code>OUTPut CH1,OFF</code></td><td>Disable CH1 output</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Status Register Bits</h4>
+        <table>
+          <thead>
+            <tr><th>Bit</th><th>Meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>0</td><td>CH1 mode: 0=CV, 1=CC</td></tr>
+            <tr><td>1</td><td>CH2 mode: 0=CV, 1=CC</td></tr>
+            <tr><td>2&ndash;3</td><td>Tracking: 01=Independent, 11=Series, 10=Parallel</td></tr>
+            <tr><td>4</td><td>CH1 output: 0=OFF, 1=ON</td></tr>
+            <tr><td>5</td><td>CH2 output: 0=OFF, 1=ON</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Serial Config</h4>
+        <p>Virtual USB serial. 9600 baud, 8 data bits, 1 stop bit, no parity. Commands terminated with <code>\n</code>. Responses terminated with <code>\n</code>.</p>
+      </div>
+    </details>
+
+    <!-- Log -->
+    <details>
+      <summary>Log</summary>
+      <div class="details-content">
+        <pre class="log-output" id="logOutput"></pre>
+      </div>
+    </details>
+  </main>
+
+  <!-- Toast notifications -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Module load failure banner -->
+  <div id="moduleWarning" style="display:none; position:fixed; top:0; left:0; right:0; z-index:999;
+    background:#dc2626; color:#fff; padding:0.75rem 1rem; text-align:center; font-family:system-ui,sans-serif; font-size:0.9rem;">
+    App modules failed to load. You probably opened this file directly &mdash; ES modules require a web server.<br>
+    Run <strong style="font-family:monospace">uv run serve.py</strong> then open <strong>http://localhost:8000</strong>
+  </div>
+  <script>
+    window._spd3303xModulesLoaded = false;
+    setTimeout(function() {
+      if (!window._spd3303xModulesLoaded) {
+        document.getElementById('moduleWarning').style.display = 'block';
+      }
+    }, 2000);
+  </script>
+</body>
+
+</html>
