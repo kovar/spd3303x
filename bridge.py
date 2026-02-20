@@ -70,50 +70,66 @@ def find_device():
     # Try USB serial ports first
     all_ports = list(serial.tools.list_ports.comports())
     usb_ports = [p for p in all_ports if _is_usb_port(p)]
-    ports = usb_ports or all_ports
 
-    if ports:
-        if not usb_ports:
-            print("No USB serial devices found — showing all ports:")
-        if len(ports) == 1:
-            tag = " [USB]" if _is_usb_port(ports[0]) else ""
-            print(f"Found serial port: {ports[0].device}{tag}  —  {ports[0].description}")
-            return "serial", ports[0].device
+    if usb_ports:
+        if len(usb_ports) == 1:
+            p = usb_ports[0]
+            vid_pid = f"  VID:PID={p.vid:04X}:{p.pid:04X}" if p.vid is not None else ""
+            print(f"Found serial port: {p.device} [USB]  —  {p.description}{vid_pid}")
+            return "serial", p.device
         print("USB serial devices found:\n")
-        for i, p in enumerate(ports, 1):
+        for i, p in enumerate(usb_ports, 1):
             vid_pid = f"  VID:PID={p.vid:04X}:{p.pid:04X}" if p.vid is not None else ""
             print(f"  [{i}]  {p.device}  —  {p.description}{vid_pid}")
         print()
         while True:
             try:
-                choice = input(f"Type a number [1-{len(ports)}] and press Enter: ").strip()
+                choice = input(f"Type a number [1-{len(usb_ports)}] and press Enter: ").strip()
                 idx = int(choice) - 1
-                if 0 <= idx < len(ports):
-                    return "serial", ports[idx].device
+                if 0 <= idx < len(usb_ports):
+                    return "serial", usb_ports[idx].device
             except (ValueError, EOFError):
                 pass
-            print(f"  Please enter a number between 1 and {len(ports)}")
+            print(f"  Please enter a number between 1 and {len(usb_ports)}")
 
-    # Fall back to USBTMC (Linux — device presents as /dev/usbtmc*)
+    # No USB serial ports — try USBTMC (Linux: SPD3303X presents as /dev/usbtmc*)
     usbtmc_devs = sorted(glob.glob("/dev/usbtmc*"))
-    if not usbtmc_devs:
-        return None, None
-    if len(usbtmc_devs) == 1:
-        print(f"Found USBTMC device: {usbtmc_devs[0]}")
-        return "usbtmc", usbtmc_devs[0]
-    print("Multiple USBTMC devices found:\n")
-    for i, d in enumerate(usbtmc_devs, 1):
-        print(f"  [{i}]  {d}")
-    print()
-    while True:
-        try:
-            choice = input(f"Type a number [1-{len(usbtmc_devs)}] and press Enter: ").strip()
-            idx = int(choice) - 1
-            if 0 <= idx < len(usbtmc_devs):
-                return "usbtmc", usbtmc_devs[idx]
-        except (ValueError, EOFError):
-            pass
-        print(f"  Please enter a number between 1 and {len(usbtmc_devs)}")
+    if usbtmc_devs:
+        if len(usbtmc_devs) == 1:
+            print(f"Found USBTMC device: {usbtmc_devs[0]}")
+            return "usbtmc", usbtmc_devs[0]
+        print("Multiple USBTMC devices found:\n")
+        for i, d in enumerate(usbtmc_devs, 1):
+            print(f"  [{i}]  {d}")
+        print()
+        while True:
+            try:
+                choice = input(f"Type a number [1-{len(usbtmc_devs)}] and press Enter: ").strip()
+                idx = int(choice) - 1
+                if 0 <= idx < len(usbtmc_devs):
+                    return "usbtmc", usbtmc_devs[idx]
+            except (ValueError, EOFError):
+                pass
+            print(f"  Please enter a number between 1 and {len(usbtmc_devs)}")
+
+    # Last resort: show all serial ports (non-USB)
+    if all_ports:
+        print("No USB serial or USBTMC devices found — showing all serial ports:")
+        if len(all_ports) == 1:
+            print(f"Found serial port: {all_ports[0].device}  —  {all_ports[0].description}")
+            return "serial", all_ports[0].device
+        for i, p in enumerate(all_ports, 1):
+            print(f"  [{i}]  {p.device}  —  {p.description}")
+        print()
+        while True:
+            try:
+                choice = input(f"Type a number [1-{len(all_ports)}] and press Enter: ").strip()
+                idx = int(choice) - 1
+                if 0 <= idx < len(all_ports):
+                    return "serial", all_ports[idx].device
+            except (ValueError, EOFError):
+                pass
+            print(f"  Please enter a number between 1 and {len(all_ports)}")
 
 
 def open_serial(port_name):
