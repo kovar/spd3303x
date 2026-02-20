@@ -81,5 +81,9 @@ uv run bridge.py /dev/cu.usbserial-10   # specify port
 ```
 Dependencies (`pyserial`, `websockets`, `influxdb-client`) are declared inline via PEP 723 — `uv` installs them automatically.
 
+**Linux: device not appearing as `/dev/ttyUSB0`**
+
+The SPD3303X presents a USB virtual serial port. If it doesn't appear, ensure you are in the `dialout` group (`sudo usermod -aG dialout $USER`, then log out and back in). On Ubuntu/Debian, the `brltty` package can also block USB serial devices — `sudo apt remove brltty`, then unplug and replug.
+
 **Optional InfluxDB logging:**
 The bridge can optionally log readings to InfluxDB 2.x. At startup it prompts `Enable InfluxDB logging? [y/N]` — answering N (or pressing Enter) skips it entirely. If enabled, it collects 4 measurement responses per cycle and writes a single point with fields `ch1_voltage, ch1_current, ch2_voltage, ch2_current`.
