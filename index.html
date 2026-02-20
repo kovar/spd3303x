@@ -253,7 +253,10 @@
           <dt>Bridge (any browser)</dt>
           <dd>Start the bridge: <code>uv run bridge.py</code>, then click <strong>Bridge</strong>. This relays SCPI commands over WebSocket so Firefox, Safari, and remote browsers can talk to the device.</dd>
           <dt>Linux: device not showing up?</dt>
-          <dd>The SPD3303X presents a USB virtual serial port and should appear as <code>/dev/ttyUSB0</code>. If it doesn't, make sure you are in the <code>dialout</code> group: <code>sudo usermod -aG dialout $USER</code> (log out and back in after). On Ubuntu/Debian, the <code>brltty</code> package can also block USB serial devices &mdash; removing it (<code>sudo apt remove brltty</code>) and replugging often fixes the issue.</dd>
+          <dd>On Linux the SPD3303X presents as a USBTMC instrument at <code>/dev/usbtmc0</code> rather than a serial port &mdash; the bridge detects and uses this automatically. To grant access without <code>sudo</code>, add a udev rule:
+            <br><code>echo 'SUBSYSTEM=="usbmisc", KERNEL=="usbtmc*", ATTRS{idVendor}=="f4ec", MODE="0666"' | sudo tee /etc/udev/rules.d/99-siglent-spd3303x.rules</code>
+            <br><code>sudo udevadm control --reload-rules &amp;&amp; sudo udevadm trigger</code>
+          </dd>
         </dl>
 
         <h4>2. Toolbar buttons</h4>
