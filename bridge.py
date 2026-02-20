@@ -24,6 +24,7 @@ The web app connects to ws://localhost:8765 (default).
 
 import asyncio
 import getpass
+import glob
 import re
 import sys
 
@@ -52,53 +53,67 @@ _collected = {}  # accumulates fields until all 4 present
 
 
 def _is_usb_port(p):
-    """Return True if this port looks like a USB serial device.
-
-    Checks VID/PID first (most reliable), then falls back to device name
-    patterns for systems where pyserial doesn't populate VID/PID from sysfs.
-    USB serial devices on Linux appear as /dev/ttyUSB* or /dev/ttyACM*;
-    on macOS as /dev/cu.usbserial-* or /dev/cu.usbmodem*.
-    """
+    """Return True if this port looks like a USB serial device."""
     if p.vid is not None:
         return True
     name = p.device.lower()
     return any(s in name for s in ("ttyusb", "ttyacm", "cu.usb", "cu.wch"))
 
 
-def find_serial_port():
-    """List available serial ports, preferring USB devices.
+def find_device():
+    """Find the SPD3303X — as a USB serial port or a USBTMC device.
 
-    The SPD3303X presents a USB virtual serial port. We show only USB ports
-    by default and fall back to all ports if none are found.
+    On macOS/Windows the device presents as a virtual serial port.
+    On Linux it typically presents as /dev/usbtmc0 (USBTMC class).
+    Returns (transport, path) where transport is 'serial' or 'usbtmc'.
     """
+    # Try USB serial ports first
     all_ports = list(serial.tools.list_ports.comports())
-    if not all_ports:
-        return None
-
     usb_ports = [p for p in all_ports if _is_usb_port(p)]
-    ports = usb_ports if usb_ports else all_ports
-    if not usb_ports:
-        print("No USB serial devices found — showing all ports:")
+    ports = usb_ports or all_ports
 
-    if len(ports) == 1:
-        tag = " [USB]" if _is_usb_port(ports[0]) else ""
-        print(f"Found serial port: {ports[0].device}{tag}  —  {ports[0].description}")
-        return ports[0].device
+    if ports:
+        if not usb_ports:
+            print("No USB serial devices found — showing all ports:")
+        if len(ports) == 1:
+            tag = " [USB]" if _is_usb_port(ports[0]) else ""
+            print(f"Found serial port: {ports[0].device}{tag}  —  {ports[0].description}")
+            return "serial", ports[0].device
+        print("USB serial devices found:\n")
+        for i, p in enumerate(ports, 1):
+            vid_pid = f"  VID:PID={p.vid:04X}:{p.pid:04X}" if p.vid is not None else ""
+            print(f"  [{i}]  {p.device}  —  {p.description}{vid_pid}")
+        print()
+        while True:
+            try:
+                choice = input(f"Type a number [1-{len(ports)}] and press Enter: ").strip()
+                idx = int(choice) - 1
+                if 0 <= idx < len(ports):
+                    return "serial", ports[idx].device
+            except (ValueError, EOFError):
+                pass
+            print(f"  Please enter a number between 1 and {len(ports)}")
 
-    print("USB serial devices found:\n")
-    for i, p in enumerate(ports, 1):
-        vid_pid = f"  VID:PID={p.vid:04X}:{p.pid:04X}" if p.vid is not None else ""
-        print(f"  [{i}]  {p.device}  —  {p.description}{vid_pid}")
+    # Fall back to USBTMC (Linux — device presents as /dev/usbtmc*)
+    usbtmc_devs = sorted(glob.glob("/dev/usbtmc*"))
+    if not usbtmc_devs:
+        return None, None
+    if len(usbtmc_devs) == 1:
+        print(f"Found USBTMC device: {usbtmc_devs[0]}")
+        return "usbtmc", usbtmc_devs[0]
+    print("Multiple USBTMC devices found:\n")
+    for i, d in enumerate(usbtmc_devs, 1):
+        print(f"  [{i}]  {d}")
     print()
     while True:
         try:
-            choice = input(f"Type a number [1-{len(ports)}] and press Enter: ").strip()
+            choice = input(f"Type a number [1-{len(usbtmc_devs)}] and press Enter: ").strip()
             idx = int(choice) - 1
-            if 0 <= idx < len(ports):
-                return ports[idx].device
+            if 0 <= idx < len(usbtmc_devs):
+                return "usbtmc", usbtmc_devs[idx]
         except (ValueError, EOFError):
             pass
-        print(f"  Please enter a number between 1 and {len(ports)}")
+        print(f"  Please enter a number between 1 and {len(usbtmc_devs)}")
 
 
 def open_serial(port_name):
@@ -267,7 +282,7 @@ async def ws_to_serial(ser, ws):
 
 
 async def handler(ws, ser):
-    """Handle a single WebSocket connection."""
+    """Handle a single WebSocket connection (serial transport)."""
     peer = getattr(ws, "remote_address", None)
     print(f"  Client connected: {peer}")
     try:
@@ -279,24 +294,77 @@ async def handler(ws, ser):
         print(f"  Client disconnected: {peer}")
 
 
+async def handler_usbtmc(ws, f):
+    """Handle a single WebSocket connection (USBTMC transport).
+
+    USBTMC is strictly request-response: write a command, then immediately
+    read the response for query commands (those containing '?').
+    """
+    peer = getattr(ws, "remote_address", None)
+    print(f"  Client connected: {peer}")
+    loop = asyncio.get_event_loop()
+    try:
+        async for message in ws:
+            cmd = message.strip()
+            if not cmd:
+                continue
+            await loop.run_in_executor(None, f.write, (cmd + "\n").encode("ascii"))
+            print(f"  → Sent to PSU: {cmd}")
+            track_query(cmd)
+            if "?" in cmd:
+                raw = await loop.run_in_executor(None, f.read, 4096)
+                line = raw.decode("ascii", errors="replace").strip()
+                if line:
+                    try:
+                        await ws.send(line)
+                    except websockets.ConnectionClosed:
+                        break
+                    track_response(line)
+    except websockets.ConnectionClosed:
+        pass
+    finally:
+        print(f"  Client disconnected: {peer}")
+
+
 async def main():
-    port_name = sys.argv[1] if len(sys.argv) > 1 else find_serial_port()
-    if not port_name:
-        print("No serial ports found. Connect the SPD3303X and try again,")
-        print("or specify the port: uv run bridge.py /dev/cu.usbserial-10")
+    if len(sys.argv) > 1:
+        # Explicit path given — detect type by name
+        path = sys.argv[1]
+        transport = "usbtmc" if "usbtmc" in path else "serial"
+    else:
+        transport, path = find_device()
+
+    if not path:
+        print("No serial port or USBTMC device found. Connect the SPD3303X and try again.")
+        print("  Serial:  uv run bridge.py /dev/ttyUSB0")
+        print("  USBTMC:  uv run bridge.py /dev/usbtmc0")
         sys.exit(1)
 
-    print(f"Opening serial port: {port_name} at {BAUD_RATE} baud")
-    ser = open_serial(port_name)
-    print(f"Serial port opened: {ser.name}")
-
-    setup_influxdb()
-
-    print(f"Starting WebSocket server on ws://{WS_HOST}:{WS_PORT}")
-    print("Web app can now connect via the Bridge button.\n")
-
-    async with websockets.serve(lambda ws: handler(ws, ser), WS_HOST, WS_PORT):
-        await asyncio.Future()  # run forever
+    if transport == "usbtmc":
+        print(f"Opening USBTMC device: {path}")
+        try:
+            f = open(path, "r+b", buffering=0)
+        except PermissionError:
+            print(f"Permission denied: {path}")
+            print("Add a udev rule to grant access:")
+            print("  echo 'SUBSYSTEM==\"usbmisc\", KERNEL==\"usbtmc*\", ATTRS{idVendor}==\"f4ec\", MODE=\"0666\"' \\")
+            print("    | sudo tee /etc/udev/rules.d/99-siglent-spd3303x.rules")
+            print("  sudo udevadm control --reload-rules && sudo udevadm trigger")
+            sys.exit(1)
+        setup_influxdb()
+        print(f"Starting WebSocket server on ws://{WS_HOST}:{WS_PORT}")
+        print("Web app can now connect via the Bridge button.\n")
+        async with websockets.serve(lambda ws: handler_usbtmc(ws, f), WS_HOST, WS_PORT):
+            await asyncio.Future()
+    else:
+        print(f"Opening serial port: {path} at {BAUD_RATE} baud")
+        ser = open_serial(path)
+        print(f"Serial port opened: {ser.name}")
+        setup_influxdb()
+        print(f"Starting WebSocket server on ws://{WS_HOST}:{WS_PORT}")
+        print("Web app can now connect via the Bridge button.\n")
+        async with websockets.serve(lambda ws: handler(ws, ser), WS_HOST, WS_PORT):
+            await asyncio.Future()
 
 
 if __name__ == "__main__":
