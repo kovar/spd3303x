@@ -34,6 +34,7 @@ import websockets
 
 
 BAUD_RATE = 9600
+TCP_PORT = 5025
 WS_HOST = "localhost"
 WS_PORT = 8765
 
@@ -342,12 +343,75 @@ async def handler_usbtmc(ws, f):
         print(f"  Client disconnected: {peer}")
 
 
+async def handler_tcp(ws, reader, writer):
+    """WebSocket ↔ Ethernet TCP handler (natively async)."""
+    peer = getattr(ws, "remote_address", None)
+    print(f"  Client connected: {peer}")
+    try:
+        async for message in ws:
+            cmd = message.strip()
+            if not cmd:
+                continue
+            writer.write((cmd + "\n").encode("ascii"))
+            await writer.drain()
+            print(f"  → Sent to PSU: {cmd}")
+            track_query(cmd)
+            if "?" in cmd:
+                raw = await reader.readline()
+                line = raw.decode("ascii", errors="replace").strip()
+                if line:
+                    try:
+                        await ws.send(line)
+                    except websockets.ConnectionClosed:
+                        break
+                    track_response(line)
+    except websockets.ConnectionClosed:
+        pass
+    finally:
+        print(f"  Client disconnected: {peer}")
+
+
 async def main():
     if len(sys.argv) > 1:
-        # Explicit path given — detect type by name
+        # Explicit path given — detect type by name, skip transport prompt
         path = sys.argv[1]
         transport = "usbtmc" if "usbtmc" in path else "serial"
     else:
+        print("Select transport:")
+        print("  [1] Ethernet (TCP)")
+        print("  [2] Serial / USB (auto-detect)")
+        while True:
+            try:
+                choice = input("Choice: ").strip()
+            except EOFError:
+                sys.exit(1)
+            if choice == "1":
+                transport = "ethernet"
+                break
+            elif choice == "2":
+                transport = None  # auto-detect below
+                break
+            print("  Enter 1 or 2")
+
+        if transport == "ethernet":
+            default_ip = "192.168.1.100"
+            ip = input(f"IP address [{default_ip}]: ").strip() or default_ip
+            print(f"\nConnecting to {ip}:{TCP_PORT}...", end=" ", flush=True)
+            try:
+                reader, writer = await asyncio.open_connection(ip, TCP_PORT)
+            except (ConnectionRefusedError, OSError) as e:
+                print(f"✗\nFailed to connect to {ip}:{TCP_PORT}: {e}")
+                sys.exit(1)
+            print("✓")
+            setup_influxdb()
+            print(f"Starting WebSocket server on ws://{WS_HOST}:{WS_PORT}")
+            print("Web app can now connect via the Bridge button.\n")
+            async with websockets.serve(
+                lambda ws: handler_tcp(ws, reader, writer), WS_HOST, WS_PORT
+            ):
+                await asyncio.Future()
+            return
+
         transport, path = find_device()
 
     if not path:
