@@ -75,13 +75,34 @@ def _is_usb_port(p):
 
 
 def find_device():
-    """Find the SPD3303X — as a USB serial port or a USBTMC device.
+    """Find the SPD3303X — as a USBTMC device or a USB serial port.
 
-    On macOS/Windows the device presents as a virtual serial port.
-    On Linux it typically presents as /dev/usbtmc0 (USBTMC class).
+    On Linux the SPD3303X presents as /dev/usbtmc* (USBTMC class); USBTMC is
+    checked first so other USB serial devices on the system don't interfere.
+    On macOS/Windows it presents as a virtual serial port (no USBTMC node).
     Returns (transport, path) where transport is 'serial' or 'usbtmc'.
     """
-    # Try USB serial ports first
+    # Try USBTMC first (Linux) — takes priority over any USB serial ports
+    usbtmc_devs = sorted(glob.glob("/dev/usbtmc*"))
+    if usbtmc_devs:
+        if len(usbtmc_devs) == 1:
+            print(f"Found USBTMC device: {usbtmc_devs[0]}")
+            return "usbtmc", usbtmc_devs[0]
+        print("Multiple USBTMC devices found:\n")
+        for i, d in enumerate(usbtmc_devs, 1):
+            print(f"  [{i}]  {d}")
+        print()
+        while True:
+            try:
+                choice = input(f"Type a number [1-{len(usbtmc_devs)}] and press Enter: ").strip()
+                idx = int(choice) - 1
+                if 0 <= idx < len(usbtmc_devs):
+                    return "usbtmc", usbtmc_devs[idx]
+            except (ValueError, EOFError):
+                pass
+            print(f"  Please enter a number between 1 and {len(usbtmc_devs)}")
+
+    # No USBTMC — try USB serial ports (macOS/Windows)
     all_ports = list(serial.tools.list_ports.comports())
     usb_ports = [p for p in all_ports if _is_usb_port(p)]
 
@@ -106,29 +127,9 @@ def find_device():
                 pass
             print(f"  Please enter a number between 1 and {len(usb_ports)}")
 
-    # No USB serial ports — try USBTMC (Linux: SPD3303X presents as /dev/usbtmc*)
-    usbtmc_devs = sorted(glob.glob("/dev/usbtmc*"))
-    if usbtmc_devs:
-        if len(usbtmc_devs) == 1:
-            print(f"Found USBTMC device: {usbtmc_devs[0]}")
-            return "usbtmc", usbtmc_devs[0]
-        print("Multiple USBTMC devices found:\n")
-        for i, d in enumerate(usbtmc_devs, 1):
-            print(f"  [{i}]  {d}")
-        print()
-        while True:
-            try:
-                choice = input(f"Type a number [1-{len(usbtmc_devs)}] and press Enter: ").strip()
-                idx = int(choice) - 1
-                if 0 <= idx < len(usbtmc_devs):
-                    return "usbtmc", usbtmc_devs[idx]
-            except (ValueError, EOFError):
-                pass
-            print(f"  Please enter a number between 1 and {len(usbtmc_devs)}")
-
     # Last resort: show all serial ports (non-USB)
     if all_ports:
-        print("No USB serial or USBTMC devices found — showing all serial ports:")
+        print("No USBTMC or USB serial devices found — showing all serial ports:")
         if len(all_ports) == 1:
             print(f"Found serial port: {all_ports[0].device}  —  {all_ports[0].description}")
             return "serial", all_ports[0].device
@@ -363,11 +364,19 @@ async def handler_usbtmc(ws, f):
             cmd = message.strip()
             if not cmd:
                 continue
-            await loop.run_in_executor(None, f.write, (cmd + "\n").encode("ascii"))
+            try:
+                await loop.run_in_executor(None, f.write, (cmd + "\n").encode("ascii"))
+            except OSError as e:
+                print(f"\n  USBTMC write error: {e}")
+                break
             print(f"  → Sent to PSU: {cmd}")
             track_query(cmd)
             if "?" in cmd:
-                raw = await loop.run_in_executor(None, f.read, 4096)
+                try:
+                    raw = await loop.run_in_executor(None, f.read, 4096)
+                except OSError as e:
+                    print(f"\n  USBTMC read error: {e}")
+                    break
                 line = raw.decode("ascii", errors="replace").strip()
                 if line:
                     try:
