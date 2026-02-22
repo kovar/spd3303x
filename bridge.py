@@ -214,7 +214,8 @@ def setup_influxdb():
         return None
     print("✓")
 
-    write_api = client.write_api()
+    from influxdb_client.client.write_api import SYNCHRONOUS
+    write_api = client.write_api(write_options=SYNCHRONOUS)
     _influx = {
         "client": client,
         "write_api": write_api,
