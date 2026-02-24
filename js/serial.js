@@ -64,12 +64,16 @@ export class WebSerialTransport extends EventTarget {
   }
 
   async #readLoop() {
+    const GRACE_MS = 5000;
+    const RETRY_MS = 500;
     const decoder = new TextDecoder();
-    let buffer = '';
+    let graceStart = null;
 
     while (this.#running && this.#port?.readable) {
       try {
         this.#reader = this.#port.readable.getReader();
+        graceStart = null; // reader acquired — reset grace timer
+        let buffer = '';
         while (this.#running) {
           const { value, done } = await this.#reader.read();
           if (done) break;
@@ -86,8 +90,17 @@ export class WebSerialTransport extends EventTarget {
           }
         }
       } catch (err) {
-        if (this.#running) {
+        if (!this.#running) break;
+        const now = Date.now();
+        if (graceStart === null) {
+          graceStart = now;
+          this.#emit('log', { message: 'Serial hiccup — retrying for up to 5 s…' });
+        }
+        if (now - graceStart < GRACE_MS) {
+          await new Promise(r => setTimeout(r, RETRY_MS));
+        } else {
           this.#emit('error', { message: 'Read error: ' + err.message });
+          break;
         }
       } finally {
         if (this.#reader) {
