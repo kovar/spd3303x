@@ -25,6 +25,7 @@ const statsTrackers = {
 let queue = null;
 let pollTimer = null;
 let statusTimer = null;
+let pollBusy = false;
 let demoInterval = null;
 let demoState = null;
 
@@ -203,22 +204,31 @@ function stopPolling() {
 }
 
 async function doPoll() {
-  if (!queue) return;
+  if (!queue || pollBusy) return;
+  pollBusy = true;
   try {
     const reading = await requestReading(queue);
     handleReading(reading);
   } catch (err) {
     appendLog('Poll error: ' + err.message);
+    queue?.clear(); // flush stale pending entries to prevent queue desync
+  } finally {
+    pollBusy = false;
   }
 }
 
 async function doStatusPoll() {
-  if (!queue) return;
+  if (!queue || pollBusy) return;
+  pollBusy = true;
   try {
     const response = await queue.query(SCPI.STATUS);
     const status = parseStatus(response);
     if (status) updateStatus(status);
-  } catch (_) {}
+  } catch (_) {
+    queue?.clear();
+  } finally {
+    pollBusy = false;
+  }
 }
 
 function handleReading(reading) {
