@@ -535,11 +535,12 @@ def write_influx_point(fields):
     if not _influx:
         return
 
-    from influxdb_client import Point
+    from influxdb_client import Point, WritePrecision
 
     point = Point(_influx["measurement"])
     for name, value in fields.items():
         point = point.field(name, value)
+    point = point.time(datetime.datetime.now(datetime.timezone.utc), WritePrecision.MILLISECONDS)
 
     try:
         _influx["write_api"].write(
