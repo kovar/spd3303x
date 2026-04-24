@@ -13,9 +13,12 @@ Usage:
 import http.server
 import os
 import webbrowser
+from functools import partial
 
 PORT = 8000
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
-print(f"Serving at http://localhost:{PORT}")
+ROOT = os.path.dirname(os.path.abspath(__file__))
+handler = partial(http.server.SimpleHTTPRequestHandler, directory=ROOT)
+server = http.server.HTTPServer(("", PORT), handler)
+print(f"Serving {ROOT} at http://localhost:{PORT}")
 webbrowser.open(f"http://localhost:{PORT}")
-http.server.HTTPServer(("", PORT), http.server.SimpleHTTPRequestHandler).serve_forever()
+server.serve_forever()
